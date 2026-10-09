@@ -6,25 +6,27 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android platform 36
+      # runner 自带 Android SDK(ANDROID_HOME),这里只负责接受许可协议并装 36 平台,
+      # 不再用 setup-android 这个 action(它在交互式许可确认处卡住报错)
+      - name: Accept licenses and install SDK platform 36
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+          set +o pipefail
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null 2>&1 || true
+          "$SDKM" "platforms;android-36" "build-tools;36.0.0" || echo "sdkmanager install skipped, Gradle will download on demand"
+          ls "$ANDROID_HOME/licenses"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
