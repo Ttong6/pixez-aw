@@ -1,0 +1,120 @@
+--- a/compose-miuix/shared/src/commonMain/kotlin/com/perol/pixez/shared/ui/navigation/animation/CardExpandLayer.kt	2026-10-09 08:45:08.671562342 +0000
++++ b/compose-miuix/shared/src/commonMain/kotlin/com/perol/pixez/shared/ui/navigation/animation/CardExpandLayer.kt	2026-10-09 08:45:23.219607782 +0000
+@@ -6,6 +6,7 @@
+ import androidx.compose.ui.graphics.Color
+ import androidx.compose.ui.graphics.TransformOrigin
+ import androidx.compose.ui.graphics.graphicsLayer
++import androidx.compose.ui.draw.drawBehind
+ import androidx.compose.ui.draw.drawWithContent
+ import androidx.compose.ui.unit.Dp
+ import androidx.compose.ui.unit.dp
+@@ -138,11 +139,15 @@
+     containerBounds: Rect,
+     containerCornerRadiusDp: Float = 0f,
+ ): BackdropLayerState {
++    val progress = expansion.coerceIn(0f, 1f)
+     val origin = resolveBackdropTransformOrigin(sourceBounds, containerBounds)
++    val scale = lerp(1f, BACKDROP_MIN_SCALE, progress)
++    // 屏幕圆角随展开度渐入，并除以缩放比做逆向补偿，避免 graphicsLayer 缩小后圆角缩水。
++    val screenCornerDp = lerp(0f, containerCornerRadiusDp, progress)
+     return BackdropLayerState(
+-        scale = 1f,
++        scale = scale,
+         transformOrigin = origin,
+-        localCornerRadiusDp = 0f,
++        localCornerRadiusDp = screenCornerDp / scale.coerceAtLeast(MIN_SCALE),
+     )
+ }
+ 
+@@ -191,10 +196,12 @@
+ private const val BACKDROP_SCRIM_ALPHA = 0.24f
+ 
+ /**
+- * 底层页面在顶层完全展开时的缩放比例：保持 1.0f 铺满全屏，
+- * 避免局部卡片展开/收回期间底层列表向内收缩退让而在列表四周露出浅色容器底色白边。
++ * 底层页面在顶层完全展开时的缩放比例（iOS 式堆叠退让）。
++ *
++ * 缩放产生的四周空隙由 [cardExpandScrim] 在底层页面背后铺的黑色底板填满，不会露出浅色容器底色。
++ * 数值越小退让越明显，建议 0.90f ~ 0.96f。
+  */
+-internal const val BACKDROP_MIN_SCALE = 1.0f
++internal const val BACKDROP_MIN_SCALE = 0.94f
+ 
+ /**
+  * 顶层页面淡入/淡出的进度窗口。
+@@ -328,12 +335,38 @@
+     containerCornerRadius: Dp = 0.dp,
+ ): Modifier {
+     val scrimAlpha = alpha.coerceIn(0f, 1f)
+-    return this.drawWithContent {
+-        drawContent()
+-        if (scrimAlpha > 0.001f) {
+-            drawRect(Color.Black.copy(alpha = scrimAlpha))
++    val progress = expansion.coerceIn(0f, 1f)
++    val state = resolveBackdropLayerState(
++        expansion = progress,
++        sourceBounds = sourceBounds,
++        containerBounds = containerBounds,
++        containerCornerRadiusDp = containerCornerRadius.value,
++    )
++    return this
++        // 位于 graphicsLayer 之前：按未缩放的整页范围绘制黑色底板，填满页面缩小后露出的四周空隙。
++        .drawBehind {
++            if (progress > 0.001f) {
++                drawRect(Color.Black.copy(alpha = progress))
++            }
++        }
++        // 始终挂载同一个 graphicsLayer 节点，稳态下为恒等变换且关闭裁切。
++        .graphicsLayer {
++            transformOrigin = state.transformOrigin
++            scaleX = state.scale
++            scaleY = state.scale
++            if (state.localCornerRadiusDp > 0.01f) {
++                shape = RoundedCornerShape(state.localCornerRadiusDp.dp)
++                clip = true
++            } else {
++                clip = false
++            }
++        }
++        .drawWithContent {
++            drawContent()
++            if (scrimAlpha > 0.001f) {
++                drawRect(Color.Black.copy(alpha = scrimAlpha))
++            }
+         }
+-    }
+ }
+ 
+ /**
+--- a/compose-miuix/shared/src/commonTest/kotlin/com/perol/pixez/shared/ui/navigation/animation/CardExpandGeometryTest.kt	2026-10-09 08:45:08.672986708 +0000
++++ b/compose-miuix/shared/src/commonTest/kotlin/com/perol/pixez/shared/ui/navigation/animation/CardExpandGeometryTest.kt	2026-10-09 08:45:23.220129222 +0000
+@@ -175,14 +175,15 @@
+     }
+ 
+     @Test
+-    fun `底层列表页面在卡片展开与收回全程保持铺满不缩放不裁切以根除四周白边`() {
++    fun `底层列表页面随展开度缩小并加圆角形成堆叠退让`() {
+         val card = Rect(left = 100f, top = 400f, right = 500f, bottom = 800f)
+         val idleBackdrop = resolveBackdropLayerState(
+             expansion = 0f,
+             sourceBounds = card,
+             containerBounds = container,
+-            containerCornerRadiusDp = 0f,
++            containerCornerRadiusDp = 32f,
+         )
++        // 未展开时恒等：不缩放、无圆角。
+         assertClose(1.0f, idleBackdrop.scale)
+         assertClose(0f, idleBackdrop.localCornerRadiusDp)
+ 
+@@ -192,8 +193,9 @@
+             containerBounds = container,
+             containerCornerRadiusDp = 32f,
+         )
+-        assertClose(1.0f, expandedBackdrop.scale)
+-        assertClose(0f, expandedBackdrop.localCornerRadiusDp)
++        // 完全展开时缩到 BACKDROP_MIN_SCALE，圆角按缩放比逆向补偿。
++        assertClose(BACKDROP_MIN_SCALE, expandedBackdrop.scale)
++        assertClose(32f / BACKDROP_MIN_SCALE, expandedBackdrop.localCornerRadiusDp)
+     }
+ 
+     @Test
